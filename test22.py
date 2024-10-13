@@ -1,113 +1,72 @@
+#Byte-at-a-time ECB decryption (Harder)
+import os
+import base64
+import random
 from Crypto.Cipher import AES
-from Crypto import Random
-import re
-prepend = b"comment1=cooking%20MCs;userdata="
-append = b";comment2=%20like%20a%20pound%20of%20bacon"  # len==42
+from Crypto.Util.Padding import pad, unpad
 
 
-def pad(value, size):
-    if len(value) % size == 0:
-        return value
-    padding = size - len(value) % size
-    padValue = bytes([padding]) * padding
-    return value + padValue
+b64_string = "Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkgaGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBqdXN0IHRvIHNheSBoaQpEaWQgeW91IHN0b3A/IE5vLCBJIGp1c3QgZHJvdmUgYnkK"
+random_key = os.urandom(16)
+random_string = os.urandom(random.randint(0, 255))
 
 
-class InvalidPaddingError(Exception):
+def AES128_harder(text: bytes) -> bytes:
+    global b64_string, random_key, random_string
+
+    secret_string = base64.b64decode(b64_string)
+    cipher=AES.new(random_key,AES.MODE_ECB)
+    plaintext = random_string + text + secret_string  # 随机前缀 + 攻击者控制 + 目标字节
+    plaintext=pad(plaintext,AES.block_size)
+    cipher=cipher.encrypt(plaintext)
+    return cipher
 
 
-    def __init__(self, paddedMsg, message="has invalid PKCS#7 padding."):
-        self.paddedMsg = paddedMsg
-        self.message = message
-        super().__init__(self.message)
+def break_AES_ECB_harder(keysize: int, encryptor: callable) -> bytes:
+    # 寻找前缀长度
+    padding = 0
+    random_blocks = 0
+    cipher_length = len(encryptor(b''))
+    prefix_length = len(os.path.commonprefix([encryptor(b'AAAA'), encryptor(b'')]))
+    print("Prefix length: ", prefix_length)
 
-    def __repr__(self):
-        return f"{ self.paddedMsg } { self.message }"
+    # 查找随机块的数量
+    for i in range(int(cipher_length / keysize)):
+        if prefix_length < i * keysize:
+            random_blocks = i
+            break
+    print("Random blocks: ", random_blocks)
 
+    # 查找所需的字节填充数
+    base_cipher = encryptor(b'')
+    for i in range(1, keysize):
+        new_cipher = encryptor(b'A' * i)
+        new_prefix_length = len(os.path.commonprefix([base_cipher, new_cipher]))
+        if new_prefix_length > prefix_length:
+            padding = i - 1
+            break
+        base_cipher = new_cipher
+    print("Number of bytes of padding required: ", padding)
 
-def valid_padding(paddedMsg, block_size):
-    if len(paddedMsg) % block_size != 0:
-        return False
+    deciphered = b""
+    ciphertext = encryptor(deciphered)
+    # 添加了填充，增加了一个块
+    run = len(ciphertext) + keysize
 
-    last_byte = paddedMsg[-1]
+    for i in range(keysize * random_blocks + 1, run + 1):
+        template = b'A' * (run - i + padding)
+        cipher = encryptor(template)
+        for j in range(256):
+            # print(i, j)
+            text = template + deciphered + j.to_bytes(1, "little")
+            c = encryptor(text)
+            if c[run - keysize:run] == cipher[run - keysize:run]:
+                deciphered += chr(j).encode()
+                break
+    
+    return unpad(deciphered,deciphered[-1])
 
-    if last_byte >= block_size:
-        return False
-
-    padValue = bytes([last_byte]) * last_byte
-    if paddedMsg[-last_byte:] != padValue:
-        return False
-
-    if not paddedMsg[:-last_byte].decode('ascii').isprintable():
-        return False
-
-    return True
-
-
-def remove_padding(paddedMsg, block_size):
-
-    if not valid_padding(paddedMsg, block_size):
-        raise InvalidPaddingError
-
-    last_byte = paddedMsg[-1]
-    unpadded = paddedMsg[:-last_byte]
-    return unpadded
-
-
-# this is the dictionary for replacements
-QUOTE = {b';': b'%3B', b'=': b'%3D'}
-
-KEY = Random.new().read(AES.block_size)
-IV = bytes(AES.block_size)
-
-
-def cbc_encrypt(input_text):
-
-    for key in QUOTE:
-        input_text = re.sub(key, QUOTE[key], input_text)
-
-    plaintext = prepend + input_text + append
-    plaintext = pad(plaintext, AES.block_size)
-
-    cipher = AES.new(KEY, AES.MODE_CBC, IV)
-    ciphertext = cipher.encrypt(plaintext)
-
-    return ciphertext
-
-
-def check(ciphertext):
-
-    cipher = AES.new(KEY, AES.MODE_CBC, IV)
-    plaintext = cipher.decrypt(ciphertext)
-    print(f"Plaintext: { plaintext }")
-
-    if b";admin=true;" in plaintext:
-        return True
-
-    return False
-
-
-def test():
-
-    input_string = b'A' * AES.block_size * 2
-    print(AES.block_size)  # 16
-    ciphertext = cbc_encrypt(input_string)
-    print(len(ciphertext))  # 112
-    required = pad(b";admin=true;", AES.block_size)
-    inject = bytes([r ^ ord('A') for r in required])  # one block of input
-    print(len(inject))  # 16
-
-    extra = len(ciphertext) - len(inject) - len(prepend)
-
-    inject = bytes(2 * AES.block_size) + inject + bytes(extra)
-
-
-    crafted = bytes([x ^ y for x, y in zip(ciphertext, inject)])
-
-    if check(crafted):
-        print("Admin Found")
-    else:
-        print("Admin Not Found")
-if __name__ == "__main__":
-    test()
-
+keysize = 16
+byte_text = break_AES_ECB_harder(keysize, AES128_harder)
+print("\nDeciphered string:\n")
+print(byte_text.decode("utf-8").strip())
