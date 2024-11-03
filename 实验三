@@ -25,4 +25,5 @@ m (0≤m≤n-1)都是未加密信息，只要我们计算一下me mod n就能发
 
 现在我们选择p=1009，q=3643。
 找出所有e，满足1<e<φ(1009,3643)且gcd(e,φ)=1，并且此时未加密信息的数目为最小值。求出所有这些e的和。
-二、
+二、Implement RSA 解题脚本为32.py
+网址https://www.cryptopals.com/sets/5/challenges/39
